@@ -5,9 +5,10 @@
   "main": "main.js",
   "scripts": {
     "start": "./node_modules/.bin/electron .",
-    "build": "electron-builder",
+    "build": "rimraf dist && npm run pack && npm run dist",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "build:win": "electron-builder --win"
   },
   "dependencies": {
     "electron-store": "^8.1.0",
@@ -16,10 +17,15 @@
   "devDependencies": {
     "dmg-builder": "^24.13.3",
     "electron": "^28.0.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "rimraf": "^6.0.1"
   },
   "build": {
     "appId": "com.weiboshare.app",
+    "productName": "微博分享助手",
+    "directories": {
+      "output": "dist"
+    },
     "mac": {
       "category": "public.app-category.utilities",
       "target": [
@@ -28,7 +34,18 @@
       "icon": "build/icon.icns"
     },
     "win": {
-      "target": "nsis"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "publisherName": "Your Company",
+      "legalTrademarks": "Your Trademark"
     },
     "dmg": {
       "icon": "build/icon.icns",
@@ -46,6 +63,13 @@
           "path": "/Applications"
         }
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "微博分享助手"
     }
   }
 }

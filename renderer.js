@@ -182,6 +182,13 @@ maxIndex.addEventListener("change", () => {
     maxIndex.value = links.length;
     return;
   }
+  links = links.slice(min - 1, max);
+  linksInput.value = '';
+  links.forEach(
+    (link, index) => (linksInput.value += `${index + 1} ${link}\n\n`)
+  );
+  updateStatus(`已选择${links.length}个链接`);
+  ipcRenderer.send("reset-selected-links");
 });
 // 筛选
 selectButton.addEventListener("click", () => {
