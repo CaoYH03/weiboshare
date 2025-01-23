@@ -27,6 +27,7 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
+    fullscreen: true,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -51,7 +52,7 @@ app.on("activate", () => {
 });
 
 // 处理开始分享请求
-ipcMain.on("start-sharing", async (event, { links, interval }) => {
+ipcMain.on("start-sharing", async (event) => {
   if (isSharing) {
     event.reply("status-update", "已有分享任务正在进行中");
     return;
@@ -62,8 +63,8 @@ ipcMain.on("start-sharing", async (event, { links, interval }) => {
     event.reply("status-update", "正在启动浏览器...");
 
     // 保存当前配置到 store
-    store.set("currentLinks", links);
-    store.set("currentInterval", interval);
+    // store.set("currentLinks", links);
+    // store.set("currentInterval", interval);
 
     const chromePath = getChromePath();
     event.reply("status-update", "正在连接Chrome浏览器...");
@@ -87,9 +88,15 @@ ipcMain.on("start-sharing", async (event, { links, interval }) => {
     });
 
     const page = await browser.newPage();
+    const { width, height } = await page.evaluate(() => {
+      return {
+        width: window.screen.width,
+        height: window.screen.height,
+      };
+    });
 
     // 设置页面超时和视窗大小
-    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setViewport({ width, height });
     page.setDefaultNavigationTimeout(60000);
     page.setDefaultTimeout(60000);
 
@@ -128,17 +135,14 @@ ipcMain.on("start-sharing", async (event, { links, interval }) => {
 });
 
 // 处理登录确认
-ipcMain.on("login-confirmed", async (event) => {
+ipcMain.on("login-confirmed", async (event, { links, interval }) => {
+  let currentIndex = store.get("currentIndex") || 0;
   try {
     const page = (await browser.pages())[0];
-    let currentIndex = 0;
-    const links = store.get("currentLinks", []);
-    const interval = store.get("currentInterval", 30000);
-
     shouldStopSharing = false;
     isSharing = true;
 
-    for (const link of links) {
+    for (const link of links.slice(currentIndex)) {
       if (shouldStopSharing) {
         event.reply("status-update", "分享任务已停止");
         break;
@@ -181,7 +185,6 @@ ipcMain.on("login-confirmed", async (event) => {
         }
 
         if (shouldStopSharing) {
-          event.reply("status-update", "分享任务已停止");
           break;
         }
 
@@ -208,8 +211,14 @@ ipcMain.on("login-confirmed", async (event) => {
           event.reply("status-update", `第 ${currentIndex} 个链接分享成功`);
 
           if (currentIndex < links.length && !shouldStopSharing) {
+            store.set("currentIndex", currentIndex);
             event.reply("status-update", `等待 ${interval / 1000} 秒后继续...`);
-            await new Promise((resolve) => setTimeout(resolve, interval));
+            // 添加停止检查
+            for (let i = 0; i < interval / 100; i++) {
+              if (shouldStopSharing) break;
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            if (shouldStopSharing) break;
           }
         }
       } catch (error) {
@@ -224,10 +233,10 @@ ipcMain.on("login-confirmed", async (event) => {
 
     isSharing = false;
     if (shouldStopSharing) {
-      event.reply("status-update", "分享任务已手动停止");
+      event.reply("status-update", "任务已停止, 点击" + "开始分享" + "按钮重新开始");
     } else {
-      event.reply("status-update", "所有链接处理完成！");
       event.reply("status-success");
+      store.set("currentIndex", 0);
     }
   } catch (error) {
     console.error("分享过程出错:", error);
@@ -240,4 +249,8 @@ ipcMain.on("login-confirmed", async (event) => {
 ipcMain.on("stop-sharing", async () => {
   shouldStopSharing = true;
   isSharing = false;
+});
+
+ipcMain.on("reset-selected-links", async () => {
+  store.set("currentIndex", 0);
 });

@@ -10,8 +10,12 @@ const linksInput = document.getElementById("linksInput");
 const intervalInput = document.getElementById("intervalInput");
 const fileInput = document.getElementById("fileInput");
 const uploadInfo = document.getElementById("uploadInfo");
+const minIndex = document.getElementById("minIndex");
+const maxIndex = document.getElementById("maxIndex");
+const selectButton = document.getElementById("selectButton");
 
 let links = [];
+let selectedLinks = [];
 
 function updateStatus(message) {
   const timestamp = new Date().toLocaleTimeString();
@@ -41,10 +45,16 @@ async function syncLinks() {
 
     links = await response.json();
     if (links.length > 0) {
+      links.forEach(
+        (link, index) => (linksInput.value += `${index + 1} ${link}\n\n`)
+      );
       updateStatus(`同步成功！共${links.length}个链接`);
-      linksInput.value = links.join("\n\n");
+      ipcRenderer.send("reset-selected-links");
       startButton.disabled = false;
       confirmLogin.disabled = false;
+      minIndex.value = 1;
+      maxIndex.value = links.length
+      selectedLinks = links;
     }
   } catch (error) {
     updateStatus(`同步失败: ${error.message}`);
@@ -54,6 +64,8 @@ async function syncLinks() {
 
 // 添加同步按钮事件监听
 syncButton.addEventListener("click", async () => {
+  linksInput.value = '';
+  links = [];
   syncButton.disabled = true;
   try {
     await syncLinks();
@@ -104,7 +116,7 @@ fileInput.addEventListener("change", (event) => {
 
   reader.readAsText(file);
 });
-
+// 启动浏览器
 startButton.addEventListener("click", () => {
   const interval = parseInt(intervalInput.value) * 1000;
 
@@ -120,14 +132,15 @@ startButton.addEventListener("click", () => {
   fileInput.disabled = true;
   updateStatus("浏览器启动中，请在打开的浏览器中完成微博登录...");
 });
-
+// 确认登录
 confirmLogin.addEventListener("click", () => {
   const result = confirm(
     '请确认：\n1. 是否已经点击"启动浏览器"按钮？\n2. 浏览器是否已经打开？\n3. 是否已经在浏览器中完成微博登录？'
   );
 
   if (result) {
-    ipcRenderer.send("login-confirmed");
+    const interval = parseInt(intervalInput.value) * 1000;
+    ipcRenderer.send("login-confirmed", { links: selectedLinks, interval });
     confirmLogin.disabled = true;
     startButton.disabled = true;
     stopButton.disabled = false;
@@ -140,18 +153,48 @@ confirmLogin.addEventListener("click", () => {
     }
   }
 });
-
+// 停止分享
 stopButton.addEventListener("click", () => {
   ipcRenderer.send("stop-sharing");
+  updateStatus("已停止分享任务");
   startButton.disabled = false;
   if (links.length > 0) {
     confirmLogin.disabled = false;
   }
   stopButton.disabled = true;
   fileInput.disabled = false;
-  updateStatus("已停止分享任务");
 });
-
+minIndex.addEventListener("change", () => {
+  const min = parseInt(minIndex.value);
+  const max = parseInt(maxIndex.value);
+  if (min < 1 || max < 1 || min > max || max > links.length) {
+    alert("请输入正确的范围");
+    minIndex.value = 1;
+    return;
+  }
+});
+maxIndex.addEventListener("change", () => {
+  const min = parseInt(minIndex.value);
+  const max = parseInt(maxIndex.value);
+  
+  if (min < 1 || max < 1 || min > max || max > links.length) {
+    alert("请输入正确的范围");
+    maxIndex.value = links.length;
+    return;
+  }
+});
+// 筛选
+selectButton.addEventListener("click", () => {
+  const min = parseInt(minIndex.value);
+  const max = parseInt(maxIndex.value);
+  selectedLinks = links.slice(min - 1, max);
+  linksInput.value = '';
+  selectedLinks.forEach(
+    (link, index) => (linksInput.value += `${index + 1} ${link}\n\n`)
+  );
+  updateStatus(`已选择${selectedLinks.length}个链接`);
+  ipcRenderer.send("reset-selected-links");
+});
 // 监听主进程消息
 ipcRenderer.on("status-update", (event, message) => {
   updateStatus(message);
@@ -162,7 +205,7 @@ ipcRenderer.on("wait-for-login", () => {
 });
 
 // 添加登录检查的监听器
-ipcRenderer.on('login-required', () => {
+ipcRenderer.on("login-required", () => {
   startButton.disabled = false;
   confirmLogin.disabled = true;
   stopButton.disabled = true;

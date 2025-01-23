@@ -65,6 +65,12 @@
       margin-top: 5px;
       color: #666;
     }
+    #selectButton {
+      margin-left: 5px;
+      color: #666;
+      padding: 4px 8px;
+      background-color: #ccc;
+    }
   </style>
 </head>
 <body>
@@ -78,6 +84,13 @@
     <div>
       <label>分享间隔(秒):</label>
       <input type="number" id="intervalInput" value="30" min="10">
+      <br>
+      <br>
+      <label>选择区间（默认全部）</label>
+      <input type="number" id="minIndex">
+      <label>到</label>
+      <input type="number" id="maxIndex">
+      <button id="selectButton">筛选</button>
     </div>
     <div>
       <label>待分享链接预览:</label>
