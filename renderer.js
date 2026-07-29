@@ -1,8 +1,8 @@
-const { ipcRenderer } = require("electron");
-const fs = require("fs");
+import { createInitialState, getSelectedRange, parseLinks, UI_STATE } from "./src/renderer/state.js";
+import { applyUiState, renderLinks, updateStatus } from "./src/renderer/ui.js";
 
 const startButton = document.getElementById("startButton");
-const confirmLogin = document.getElementById("confirmLogin");
+const confirmLoginButton = document.getElementById("confirmLogin");
 const stopButton = document.getElementById("stopButton");
 const syncButton = document.getElementById("syncButton");
 const statusDiv = document.getElementById("status");
@@ -13,68 +13,100 @@ const uploadInfo = document.getElementById("uploadInfo");
 const minIndex = document.getElementById("minIndex");
 const maxIndex = document.getElementById("maxIndex");
 const selectButton = document.getElementById("selectButton");
+const chromePathInput = document.getElementById("chromePathInput");
+const selectedSummary = document.getElementById("selectedSummary");
 
-let links = [];
-let selectedLinks = [];
+const state = createInitialState();
 
-function updateStatus(message) {
-  const timestamp = new Date().toLocaleTimeString();
-  statusDiv.innerHTML += `<div>[${timestamp}] ${message}</div>`;
-  statusDiv.scrollTop = statusDiv.scrollHeight;
+const elements = {
+  startButton,
+  confirmLoginButton,
+  stopButton,
+  fileInput,
+  syncButton,
+  selectButton,
+  chromePathInput,
+};
+
+function syncUiState() {
+  applyUiState(elements, state.uiState, state.selectedLinks.length > 0);
+  selectedSummary.textContent =
+    state.originalLinks.length > 0
+      ? `当前已选择 ${state.selectedLinks.length} / ${state.originalLinks.length} 个链接`
+      : "当前还没有可分享的链接";
 }
 
-// 同步链接函数
+function updateRangeInputs() {
+  if (state.originalLinks.length === 0) {
+    minIndex.value = "";
+    maxIndex.value = "";
+    return;
+  }
+
+  minIndex.value = "1";
+  maxIndex.value = String(state.originalLinks.length);
+}
+
+async function resetProgress() {
+  await window.weiboShareApi.resetProgress();
+}
+
+function setLinks(nextLinks, sourceLabel) {
+  state.originalLinks = [...nextLinks];
+  state.selectedLinks = [...nextLinks];
+  renderLinks(linksInput, state.selectedLinks);
+  uploadInfo.textContent = `已加载 ${nextLinks.length} 个链接`;
+  updateRangeInputs();
+  void resetProgress();
+  syncUiState();
+  updateStatus(statusDiv, `${sourceLabel}成功，共 ${nextLinks.length} 个链接`);
+}
+
+async function saveSettings() {
+  const intervalSeconds = Number.parseInt(intervalInput.value, 10);
+  state.intervalSeconds = intervalSeconds;
+  state.chromePath = chromePathInput.value.trim();
+
+  await window.weiboShareApi.saveSettings({
+    intervalSeconds,
+    chromePath: state.chromePath,
+  });
+}
+
 async function syncLinks() {
-  try {
-    updateStatus("开始同步链接...");
+  updateStatus(statusDiv, "开始同步链接...");
 
-    // 发送同步请求
-    const response = await fetch(
-      "https://open.iyiou.com//open/weibo/getPostList",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
-    );
+  const response = await fetch("https://open.iyiou.com//open/weibo/getPostList", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    links = await response.json();
-    if (links.length > 0) {
-      links.forEach(
-        (link, index) => (linksInput.value += `${index + 1} ${link}\n\n`)
-      );
-      updateStatus(`同步成功！共${links.length}个链接`);
-      ipcRenderer.send("reset-selected-links");
-      startButton.disabled = false;
-      confirmLogin.disabled = false;
-      minIndex.value = 1;
-      maxIndex.value = links.length
-      selectedLinks = links;
-    }
-  } catch (error) {
-    updateStatus(`同步失败: ${error.message}`);
-    console.error("同步错误:", error);
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
   }
+
+  const data = await response.json();
+  if (!Array.isArray(data)) {
+    throw new Error("接口返回的数据格式不正确");
+  }
+
+  const nextLinks = data.filter((link) => typeof link === "string" && link.trim());
+  if (nextLinks.length === 0) {
+    throw new Error("接口未返回有效链接");
+  }
+
+  setLinks(nextLinks, "同步链接");
 }
 
-// 添加同步按钮事件监听
-syncButton.addEventListener("click", async () => {
-  linksInput.value = '';
-  links = [];
-  syncButton.disabled = true;
-  try {
-    await syncLinks();
-  } finally {
-    syncButton.disabled = false;
-  }
-});
+async function initialize() {
+  const settings = await window.weiboShareApi.getSettings();
+  intervalInput.value = String(settings.intervalSeconds || state.intervalSeconds);
+  chromePathInput.value = settings.chromePath || "";
+  syncUiState();
+}
 
-// 处理文件上传
 fileInput.addEventListener("change", (event) => {
   const file = event.target.files[0];
   if (!file) {
@@ -82,148 +114,139 @@ fileInput.addEventListener("change", (event) => {
   }
 
   if (file.type !== "text/plain" && !file.name.endsWith(".txt")) {
-    updateStatus("请上传txt格式的文件");
+    updateStatus(statusDiv, "请上传 txt 格式的文件");
     fileInput.value = "";
     return;
   }
 
   const reader = new FileReader();
-  reader.onload = (e) => {
-    const content = e.target.result;
-    links = content
-      .split("\n")
-      .map((link) => link.trim())
-      .filter((link) => link !== "");
+  reader.onload = (loadEvent) => {
+    const content = String(loadEvent.target?.result || "");
+    const nextLinks = parseLinks(content);
 
-    if (links.length === 0) {
-      updateStatus("文件中没有找到有效的链接");
-      startButton.disabled = true;
+    if (nextLinks.length === 0) {
+      updateStatus(statusDiv, "文件中没有找到有效的链接");
       return;
     }
 
-    // 在文本框中显示链接预览
-    linksInput.value = links.join("\n\n");
-    uploadInfo.textContent = `已加载 ${links.length} 个链接`;
-    startButton.disabled = false;
-    confirmLogin.disabled = false;
-    updateStatus(`链接文件加载成功，共${links.length}个链接`);
+    setLinks(nextLinks, "链接文件加载");
   };
 
   reader.onerror = () => {
-    updateStatus("读取文件失败");
+    updateStatus(statusDiv, "读取文件失败");
     fileInput.value = "";
   };
 
   reader.readAsText(file);
 });
-// 启动浏览器
-startButton.addEventListener("click", () => {
-  const interval = parseInt(intervalInput.value) * 1000;
 
-  if (interval < 10000) {
-    updateStatus("间隔时间不能小于10秒");
+syncButton.addEventListener("click", async () => {
+  syncButton.disabled = true;
+  linksInput.value = "";
+
+  try {
+    await syncLinks();
+  } catch (error) {
+    updateStatus(statusDiv, `同步失败: ${error.message}`);
+    console.error("同步错误:", error);
+  } finally {
+    syncButton.disabled = false;
+    syncUiState();
+  }
+});
+
+selectButton.addEventListener("click", async () => {
+  try {
+    state.selectedLinks = getSelectedRange(state.originalLinks, minIndex.value, maxIndex.value);
+    renderLinks(linksInput, state.selectedLinks);
+    await resetProgress();
+    updateStatus(statusDiv, `已选择 ${state.selectedLinks.length} 个链接`);
+    syncUiState();
+  } catch (error) {
+    window.alert(error.message);
+  }
+});
+
+startButton.addEventListener("click", async () => {
+  const intervalSeconds = Number.parseInt(intervalInput.value, 10);
+  if (!Number.isInteger(intervalSeconds) || intervalSeconds < 10) {
+    updateStatus(statusDiv, "间隔时间不能小于 10 秒");
     return;
   }
 
-  // 存储当前配置
-  ipcRenderer.send("start-sharing", { links, interval });
+  await saveSettings();
+  updateStatus(statusDiv, "浏览器启动中，请在打开的浏览器中完成微博登录...");
 
-  startButton.disabled = true;
-  fileInput.disabled = true;
-  updateStatus("浏览器启动中，请在打开的浏览器中完成微博登录...");
+  const result = await window.weiboShareApi.startSharing();
+  if (!result.ok) {
+    state.uiState = UI_STATE.ERROR;
+    updateStatus(statusDiv, `启动失败: ${result.message}`);
+    syncUiState();
+  }
 });
-// 确认登录
-confirmLogin.addEventListener("click", () => {
-  const result = confirm(
-    '请确认：\n1. 是否已经点击"启动浏览器"按钮？\n2. 浏览器是否已经打开？\n3. 是否已经在浏览器中完成微博登录？'
+
+confirmLoginButton.addEventListener("click", async () => {
+  const confirmed = window.confirm(
+    '请确认：\n1. 已点击“启动浏览器”按钮\n2. 浏览器已打开\n3. 已在浏览器中完成微博登录'
   );
 
-  if (result) {
-    const interval = parseInt(intervalInput.value) * 1000;
-    ipcRenderer.send("login-confirmed", { links: selectedLinks, interval });
-    confirmLogin.disabled = true;
-    startButton.disabled = true;
-    stopButton.disabled = false;
-    updateStatus("开始执行分享任务...");
-  } else {
-    updateStatus('请先点击"启动浏览器"按钮，并在打开的浏览器中完成登录');
-    // 如果浏览器未启动，启用启动按钮
-    if (startButton.disabled && !stopButton.disabled) {
-      startButton.disabled = false;
-    }
-  }
-});
-// 停止分享
-stopButton.addEventListener("click", () => {
-  ipcRenderer.send("stop-sharing");
-  updateStatus("已停止分享任务");
-  startButton.disabled = false;
-  if (links.length > 0) {
-    confirmLogin.disabled = false;
-  }
-  stopButton.disabled = true;
-  fileInput.disabled = false;
-});
-minIndex.addEventListener("change", () => {
-  const min = parseInt(minIndex.value);
-  const max = parseInt(maxIndex.value);
-  if (min < 1 || max < 1 || min > max || max > links.length) {
-    alert("请输入正确的范围");
-    minIndex.value = 1;
+  if (!confirmed) {
+    updateStatus(statusDiv, '请先点击“启动浏览器”按钮，并在打开的浏览器中完成登录');
     return;
   }
-});
-maxIndex.addEventListener("change", () => {
-  const min = parseInt(minIndex.value);
-  const max = parseInt(maxIndex.value);
-  
-  if (min < 1 || max < 1 || min > max || max > links.length) {
-    alert("请输入正确的范围");
-    maxIndex.value = links.length;
-    return;
+
+  await saveSettings();
+  updateStatus(statusDiv, "开始执行分享任务...");
+
+  const result = await window.weiboShareApi.confirmLogin({
+    links: state.selectedLinks,
+    interval: Number.parseInt(intervalInput.value, 10) * 1000,
+  });
+
+  if (!result.ok) {
+    state.uiState = UI_STATE.ERROR;
+    updateStatus(statusDiv, `分享过程出错: ${result.message}`);
+    syncUiState();
   }
-  links = links.slice(min - 1, max);
-  linksInput.value = '';
-  links.forEach(
-    (link, index) => (linksInput.value += `${index + 1} ${link}\n\n`)
-  );
-  updateStatus(`已选择${links.length}个链接`);
-  ipcRenderer.send("reset-selected-links");
-});
-// 筛选
-selectButton.addEventListener("click", () => {
-  const min = parseInt(minIndex.value);
-  const max = parseInt(maxIndex.value);
-  selectedLinks = links.slice(min - 1, max);
-  linksInput.value = '';
-  selectedLinks.forEach(
-    (link, index) => (linksInput.value += `${index + 1} ${link}\n\n`)
-  );
-  updateStatus(`已选择${selectedLinks.length}个链接`);
-  ipcRenderer.send("reset-selected-links");
-});
-// 监听主进程消息
-ipcRenderer.on("status-update", (event, message) => {
-  updateStatus(message);
 });
 
-ipcRenderer.on("wait-for-login", () => {
-  confirmLogin.disabled = false;
+stopButton.addEventListener("click", async () => {
+  await window.weiboShareApi.stopSharing();
+  updateStatus(statusDiv, "已停止分享任务");
 });
 
-// 添加登录检查的监听器
-ipcRenderer.on("login-required", () => {
-  startButton.disabled = false;
-  confirmLogin.disabled = true;
-  stopButton.disabled = true;
-  fileInput.disabled = false;
-  updateStatus('检测到未登录状态，请点击"启动浏览器"按钮重新登录');
+intervalInput.addEventListener("change", () => {
+  void saveSettings();
 });
 
-ipcRenderer.on("status-success", () => {
-  updateStatus("所有链接处理完成！");
-  stopButton.disabled = true;
-  fileInput.disabled = false;
-  startButton.disabled = false;
-  confirmLogin.disabled = false;
+chromePathInput.addEventListener("change", () => {
+  void saveSettings();
 });
+
+window.weiboShareApi.onStatusUpdate((message) => {
+  updateStatus(statusDiv, message);
+});
+
+window.weiboShareApi.onStateChange((nextState) => {
+  state.uiState = nextState;
+  syncUiState();
+});
+
+window.weiboShareApi.onWaitForLogin(() => {
+  state.uiState = UI_STATE.WAITING_FOR_LOGIN;
+  syncUiState();
+});
+
+window.weiboShareApi.onLoginRequired(() => {
+  state.uiState = UI_STATE.LOGIN_REQUIRED;
+  updateStatus(statusDiv, '检测到未登录状态，请点击“启动浏览器”按钮重新登录');
+  syncUiState();
+});
+
+window.weiboShareApi.onStatusSuccess(() => {
+  state.uiState = UI_STATE.COMPLETED;
+  updateStatus(statusDiv, "所有链接处理完成！");
+  syncUiState();
+});
+
+void initialize();

@@ -8,7 +8,8 @@
     "build": "rimraf dist && npm run pack && npm run dist",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
-    "build:win": "electron-builder --win"
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac --universal"
   },
   "dependencies": {
     "electron-store": "^8.1.0",
@@ -28,8 +29,17 @@
     },
     "mac": {
       "category": "public.app-category.utilities",
+      "hardenedRuntime": true,
+      "notarize": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "target": [
-        "dmg"
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
       ],
       "icon": "build/icon.icns"
     },
