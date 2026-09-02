@@ -31,6 +31,30 @@ class ShareService {
     this.sendToRenderer("status-update", message);
   }
 
+  async assertLoginStillValid() {
+    if (!this.page) {
+      return;
+    }
+
+    const context = await this.page.evaluate(() => ({
+      url: window.location.href,
+      title: document.title || "",
+      bodyText: document.body ? document.body.innerText || "" : "",
+    }));
+
+    const mergedText = `${context.url}\n${context.title}\n${context.bodyText}`;
+    if (
+      mergedText.includes("登录状态发生改变") ||
+      mergedText.includes("重新登录") ||
+      mergedText.includes("请重新登录") ||
+      /passport\.weibo\.com/.test(context.url)
+    ) {
+      const error = new Error("微博登录状态已失效，请重新登录后再试");
+      error.code = "LOGIN_REQUIRED";
+      throw error;
+    }
+  }
+
   async start() {
     if ([APP_STATE.WAITING_FOR_LOGIN, APP_STATE.SHARING].includes(this.state)) {
       throw new Error("已有分享任务正在进行中");
@@ -193,7 +217,9 @@ class ShareService {
       timeout: 60000,
     });
 
+    await this.assertLoginStillValid();
     await this.tryClickCover(currentIndex);
+    await this.assertLoginStillValid();
     await this.clickShareButton();
 
     const success = await this.page
@@ -232,23 +258,54 @@ class ShareService {
   }
 
   async clickShareButton() {
-    const button = await this.page
-      .waitForSelector(".WB_btn_share", {
-        visible: true,
-        timeout: 30000,
-      })
-      .catch(() => null);
+    const selectors = [
+      "#shareIt",
+      "a#shareIt[title='分享']",
+      ".WB_btn_share",
+      ".WB_btn_share_dis",
+      "[node-type='share_btn']",
+      "[action-type='share']",
+      "a[href*='share.php']",
+    ];
 
-    if (!button) {
-      throw new Error("未找到微博分享按钮");
+    for (const selector of selectors) {
+      const button = await this.page.$(selector);
+      if (!button) {
+        continue;
+      }
+
+      await this.page.evaluate((targetSelector) => {
+        const shareButton = document.querySelector(targetSelector);
+        if (shareButton) {
+          shareButton.click();
+        }
+      }, selector);
+      return;
     }
 
-    await this.page.evaluate(() => {
-      const shareButton = document.querySelector(".WB_btn_share");
-      if (shareButton) {
-        shareButton.click();
+    const clickedByText = await this.page.evaluate(() => {
+      const candidates = Array.from(document.querySelectorAll("button,a,div,span"));
+      const shareButton = candidates.find((element) => {
+        const text = (element.textContent || "").replace(/\s+/g, "").trim();
+        if (!text) {
+          return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && (text === "分享" || text.includes("分享"));
+      });
+
+      if (!shareButton) {
+        return false;
       }
+
+      shareButton.click();
+      return true;
     });
+
+    if (!clickedByText) {
+      throw new Error("未找到微博分享按钮");
+    }
   }
 
   async waitWithStopCheck(interval) {
